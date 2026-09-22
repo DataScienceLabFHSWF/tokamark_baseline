@@ -18,20 +18,24 @@ git clone --branch main --single-branch https://github.com/UKAEA-IBM-STFC-Fusion
 cd tokamark_baseline
 ```
 
-2. Create and activate the required Conda environment and install the preprocessing packages from the **TokaMark** repository:
+2. Create a local `uv` virtual environment and install the baseline dependencies:
+
+```bash
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e .
+```
+
+3. Install the companion preprocessing packages from the **TokaMark** repository:
 
 ```bash
 git clone --branch main --single-branch  https://github.com/UKAEA-IBM-STFC-Fusion-FMs/tokamark.git
 cd tokamark
-conda env create -f environment_basic.yml
-conda activate tokamark-env
-pip install -e .
+source .venv/bin/activate
+uv pip install -e .
 ```
 
-3. Install required **TokaMark Baseline** dependencies:
-```bash
-pip install line-profiler==5.0.2 torchinfo==1.8.0
-```
+The baseline scripts import both `tokamark` and `MAST_tools`, so make sure the companion repositories or installed packages that provide those modules are available in the same environment.
 
 ## Download Sample Data
 
