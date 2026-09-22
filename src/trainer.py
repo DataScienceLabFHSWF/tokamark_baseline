@@ -106,11 +106,20 @@ def train_step(model, batch, optimizer, criterion, device=DEVICE):
 
     optimizer.zero_grad(set_to_none=True)
 
-    outputs = model(*x)
-    loss = criterion(outputs, y)
+    if hasattr(model, "training_forward"):
+        outputs, auxiliary_losses = model.training_forward(x, y)
+    else:
+        outputs = model(*x)
+        auxiliary_losses = {}
+
+    output_loss = criterion(outputs, y)
+    loss = output_loss + sum(auxiliary_losses.values(), output_loss.new_zeros(()))
 
     loss.backward()
     optimizer.step()
+
+    if hasattr(model, "update_target_encoder"):
+        model.update_target_encoder()
 
     return loss.item(), y[0].shape[0]
 
@@ -200,7 +209,9 @@ class BatchStepTrainer:
         }
 
         self.optimizer = torch.optim.Adam(
-            model.parameters(), lr=lr, weight_decay=1e-4
+            (parameter for parameter in model.parameters() if parameter.requires_grad),
+            lr=lr,
+            weight_decay=1e-4,
         )
         self.criterion = MultiOutputMSELoss()
 

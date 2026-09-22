@@ -31,12 +31,7 @@ from tokamark.evaluator import (
 )
 
 
-from src.multi_conv_mlp_model import (
-    create_cnn_architecture
-)
-from src.multi_conv_lstm_model import (
-    create_lstm_architecture
-)
+from src.model_factory import MODEL_CHOICES, create_model
 from src.model_transform import (
     ModelTransform_1,
     ModelTransform_2,
@@ -100,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        choices=["cnn", "lstm"],
+        choices=MODEL_CHOICES,
         default="cnn",
         help="Model type to train."
     )
@@ -221,25 +216,14 @@ if __name__ == "__main__":
     # Initialize Model
     # ------------------------------------------------------------------------------------------------------------------
 
-    if args.model == "cnn":
-
-        model = create_cnn_architecture(
-            dataloader_=test_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-
-    elif args.model == "lstm":
-
-        model = create_lstm_architecture(
-            dataloader_=test_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-         
-    else:
-        print("Model Unknown")
-        raise ValueError("Unknown model.")
+    model = create_model(
+        model_name=args.model,
+        dataloader=test_dataloader,
+        dict_metadata=dict_task_metadata | config_task,
+        config=config,
+        device=device,
+        verbose=False,
+    )
 
     # -------------------------------------------------------------------
     # Training loop

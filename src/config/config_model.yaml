@@ -3,7 +3,7 @@ shuffle: true
 local: true
 
 store_manager_settings:
-  base_local_zarr_path: /rds/project/rds-mOlK9qn0PlQ/fairmast/upload-tmp/level2  # REMARK: Only relevant when `local` above is true.
+  base_local_zarr_path: /mnt/data2/datasets/tokamark/data/
 
 dataloader_setting:
   batch_size: 512 #512
@@ -13,6 +13,15 @@ training_args:
   lr: 0.0001 #0.0001
   max_steps: 10000000
   patience: 10
+
+# Used only by jepa_rollout, jepa_direct_mse and jepa_direct.
+# The first two still optimize only the canonical output-space MSE.
+jepa:
+  latent_dim: 128
+  hidden_dim: 256
+  dropout: 0.0
+  target_ema: 0.996
+  latent_loss_weight: 1.0
 
 paths:
   data_output_directory: /output
