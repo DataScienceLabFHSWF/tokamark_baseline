@@ -53,6 +53,42 @@ python run_training.py --task task_1-1 --config_cnn /src/config/config_model_tes
 python run_evaluation.py --task task_1-1 --config_cnn /src/config/config_model_test.yaml --seed 23
 ```
 
+### PLUME Task 3-1 models
+
+The Task 3-1 integration vendors the PLUME profile encoder, decoder, vanilla
+latent transition, Koopman transition, and the five Q.ANT primitives they use.
+It therefore runs with ordinary PyTorch and does not require PLUME as a runtime
+dependency. The optional native Q.ANT SDK is only required when
+`plume.model.qant_backend` is explicitly set to `qant`.
+
+Available model names are:
+
+- `plume_vanilla_mse` and `plume_vanilla_jepa`
+- `plume_koopman_mse` and `plume_koopman_jepa`
+- `plume_direct_mse` and `plume_direct_jepa`
+
+The first four use the original PLUME architecture. The direct variants are a
+clearly separated extension that retains the PLUME encoder/decoder but predicts
+all ten future latent states in one forward pass. The `*_mse` variants use only
+the baseline masked profile MSE. The `*_jepa` variants add the configured latent
+and input-reconstruction losses.
+
+Example:
+
+```bash
+uv run python run_training.py --task task_3-1 --config /src/config/config_model.yaml --model plume_vanilla_jepa --split random --seed 23
+uv run python run_evaluation.py --task task_3-1 --config /src/config/config_model.yaml --model plume_vanilla_jepa --split random --seed 23
+```
+
+Backend selection is independent of `model.train()` and `model.eval()`.
+`qant_backend: torch` is consequently safe for the baseline evaluator, which
+calls `model.eval()` before inference. Native Q.ANT execution requires the
+Q.ANT 2.3.0 SDK plus `ml-dtypes==0.5.3`, CPU tensors, and
+`qant_backend: qant`.
+
+See [PLUME_TASK31.md](PLUME_TASK31.md) for the complete six-model training and
+evaluation command matrix.
+
 ## High-Level Architecture Overview
 
 ```mermaid
