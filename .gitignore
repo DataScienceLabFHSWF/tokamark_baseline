@@ -6,7 +6,7 @@
 logs/
 output/
 output*/
-results*/
+
 *.wilkes3
 launch.json
 
