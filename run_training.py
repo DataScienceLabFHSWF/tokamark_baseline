@@ -1,10 +1,10 @@
 import argparse
-from torch.utils.data.dataloader import DataLoader
-from typing import Any
-import yaml
-import torch
 from multiprocessing import cpu_count
+from typing import Any
+
+import torch
 import torch.multiprocessing as mp
+import yaml
 from torch.utils.data import DataLoader
 
 try:
@@ -12,44 +12,37 @@ try:
 except ImportError:
     from .globals import REPO_ROOT
 
-from utils import set_seed, seed_worker
-
-from tokamark.tools.utils import get_device
+from MAST_tools.utils.path_utils import (
+    RANDOM_SPLIT_OUTLIER_METADATA_FILE,
+    TEMPORAL_SPLIT_OUTLIER_METADATA_FILE,
+)
+from tokamark.data import (
+    initialize_MAST_dataset,
+    initialize_TokaMark_dataset,
+)
 from tokamark.data_split import get_train_test_val_shots
 from tokamark.tasks import get_task_config, get_task_metadata
+from tokamark.tools.path import (
+    RANDOM_SPLIT_SIGNALS_STATS_FILE,
+    RANDOM_SPLIT_TOKAMARK_DATA_SPLITS_FILE,
+    TEMPORAL_SPLIT_SIGNALS_STATS_FILE,
+    TEMPORAL_SPLIT_TOKAMARK_DATA_SPLITS_FILE,
+)
 from tokamark.tools.transforms.compose_transform import (
     ComposeTransforms,
 )
-from tokamark.data import (
-    initialize_MAST_dataset, 
-    initialize_TokaMark_dataset,
-)
-from src.multi_conv_mlp_model import (
-    create_cnn_architecture
-)
-from src.multi_conv_lstm_model import (
-    create_lstm_architecture
-)
+from tokamark.tools.utils import get_device
+
+from src.model_factory import MODEL_CHOICES, create_model, get_loss_weights
 from src.model_transform import (
     ModelTransform_1,
     ModelTransform_2,
 )
 from src.trainer import (
-    model_collate_fn,
     BatchStepTrainer,
+    model_collate_fn,
 )
-
-from tokamark.tools.path import (
-    RANDOM_SPLIT_TOKAMARK_DATA_SPLITS_FILE, 
-    RANDOM_SPLIT_SIGNALS_STATS_FILE,
-    TEMPORAL_SPLIT_TOKAMARK_DATA_SPLITS_FILE, 
-    TEMPORAL_SPLIT_SIGNALS_STATS_FILE
-    )
-
-from MAST_tools.utils.path_utils import (
-    RANDOM_SPLIT_OUTLIER_METADATA_FILE,
-    TEMPORAL_SPLIT_OUTLIER_METADATA_FILE,
-    )
+from utils import seed_worker, set_seed
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -96,8 +89,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
+        choices=MODEL_CHOICES,
         default="cnn",
-        help="Model type to train."
+        help="Model type to train.",
     )
     parser.add_argument(
         "--split",
@@ -274,23 +268,14 @@ if __name__ == "__main__":
     # Initialize Model
     # ------------------------------------------------------------------------------------------------------------------
 
-    if args.model == 'cnn':
-
-        model = create_cnn_architecture(
-            dataloader_=train_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-
-    elif args.model == 'lstm':
-
-        model = create_lstm_architecture(
-            dataloader_=train_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-    else:
-        raise ValueError('Model Unknown')
+    model = create_model(
+        model_name=args.model,
+        dataloader=train_dataloader,
+        metadata=dict_task_metadata | config_task,
+        config=config,
+        task_name=args.task,
+        verbose=False,
+    ).to(device)
         
     # ------------------------------------------------------------------------------------------------------------------
     # Training loop
@@ -312,6 +297,7 @@ if __name__ == "__main__":
         output_dir=base_model_dir,
         device=device,
         validate_every=args.validate_every,  # Validate every 100 batches by default.
+        loss_weights=get_loss_weights(args.model, config),
     )
 
     # Step through batches

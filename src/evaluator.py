@@ -1,12 +1,9 @@
-import os
-import torch
-
 import numpy as np
-import matplotlib.pyplot as plt
-
+import torch
 from tokamark.tasks import get_task_metadata
 from tokamark.tools.utils import get_device
 
+from src.plume_tokamark_adapter import unwrap_predictions
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -57,7 +54,7 @@ def cnn_unstd_evaluation_per_shot(
             y_test = [arr.to(torch.float32).to(device) for arr in y_test]
 
             # Model prediction
-            y_pred = cnn_model(*x_test)
+            y_pred = unwrap_predictions(cnn_model(*x_test))
 
             # Make sure y_pred is list-like
             if not isinstance(y_pred, (list, tuple)):

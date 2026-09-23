@@ -3,7 +3,7 @@ shuffle: true
 local: true
 
 store_manager_settings:
-  base_local_zarr_path: /rds/project/rds-mOlK9qn0PlQ/fairmast/upload-tmp/level2  # REMARK: Only relevant when `local` above is true.
+  base_local_zarr_path: /mnt/data2/datasets/tokamark/data  # REMARK: Only relevant when `local` above is true.
 
 dataloader_setting:
   batch_size: 512 #512
@@ -13,6 +13,20 @@ training_args:
   lr: 0.0001 #0.0001
   max_steps: 10000000
   patience: 10
+
+plume:
+  model:
+    profile_bins: 120
+    action_dim: 4
+    latent_dim: 128
+    horizon: 10
+    # Explicitly remain on the differentiable PyTorch path during evaluation.
+    # Set to qant only on a CPU host with the Q.ANT SDK installed.
+    qant_backend: torch
+  loss:
+    profile_weight: 1.0
+    latent_weight: 1.0
+    reconstruction_weight: 0.3
 
 paths:
   data_output_directory: /output
