@@ -42,7 +42,7 @@ from MAST_tools.utils.path_utils import (
 )
 from tokamark.data import initialize_MAST_dataset, initialize_TokaMark_dataset
 from tokamark.data_split import get_train_test_val_shots
-from tokamark.tasks import get_task_config, get_task_metadata
+from tokamark.tasks import get_signals_metadata, get_task_config, get_task_metadata
 from tokamark.tools.path import (
     RANDOM_SPLIT_SIGNALS_STATS_FILE,
     RANDOM_SPLIT_TOKAMARK_DATA_SPLITS_FILE,
@@ -64,26 +64,52 @@ QANT_CAPABLE_MODELS = (*PLUME_MODEL_CHOICES, "cnn_qant")
 
 
 class _ChannelAccumulator:
-    def __init__(self) -> None:
-        self.squared_error = 0.0
-        self.count = 0
-        self.target_squared = 0.0
+    def __init__(self, output_scale: float, metric_scale: float) -> None:
+        self.output_scale = output_scale
+        self.metric_scale = metric_scale
+        self.windows_by_shot: dict[int, list[tuple[float, float]]] = {}
 
-    def update(self, prediction: torch.Tensor, target: torch.Tensor) -> None:
-        error = (prediction - target).double()
-        self.squared_error += error.square().sum().item()
-        self.target_squared += target.double().square().sum().item()
-        self.count += error.numel()
+    def update(
+        self,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        shot_ids: torch.Tensor,
+    ) -> None:
+        prediction = prediction.reshape(prediction.shape[0], -1).double()
+        target = target.reshape(target.shape[0], -1).double()
+        if prediction.shape != target.shape:
+            raise ValueError(
+                f"Prediction/target shapes differ after flattening: "
+                f"{tuple(prediction.shape)} vs {tuple(target.shape)}"
+            )
 
-    def rmse(self) -> float:
-        return float(np.sqrt(self.squared_error / self.count)) if self.count else float("nan")
+        for index, shot_id in enumerate(shot_ids.tolist()):
+            valid = torch.isfinite(target[index])
+            if not valid.any():
+                continue
+            if not torch.isfinite(prediction[index, valid]).all():
+                raise ValueError(f"Non-finite prediction for valid target bins in shot {shot_id}")
+            error = (prediction[index, valid] - target[index, valid]) * self.output_scale
+            rmse = torch.sqrt(error.square().mean()).item()
+            mae = error.abs().mean().item()
+            self.windows_by_shot.setdefault(int(shot_id), []).append((rmse**2, mae))
 
-    def target_std(self) -> float:
-        return float(np.sqrt(self.target_squared / self.count)) if self.count else float("nan")
+    def metrics(self) -> dict[str, float | int]:
+        if not self.windows_by_shot:
+            return {"n_shots": 0, "nrmse": float("nan"), "nmae": float("nan")}
 
-    def nrmse(self) -> float:
-        std = self.target_std()
-        return self.rmse() / std if std else float("nan")
+        shot_nrmse = []
+        shot_nmae = []
+        for windows in self.windows_by_shot.values():
+            shot_rmse = float(np.sqrt(np.mean([rmse_squared for rmse_squared, _ in windows])))
+            shot_mae = float(np.mean([mae for _, mae in windows]))
+            shot_nrmse.append(shot_rmse / self.metric_scale)
+            shot_nmae.append(shot_mae / self.metric_scale)
+        return {
+            "n_shots": len(shot_nrmse),
+            "nrmse": float(np.mean(shot_nrmse)),
+            "nmae": float(np.mean(shot_nmae)),
+        }
 
 
 def _build_test_dataloader(task: str, split: str, config: dict, config_task: dict, batch_size: int):
@@ -151,24 +177,66 @@ def _discover_seeds(config: dict, split: str, model_name: str, task_name: str) -
     return sorted(seeds)
 
 
-def _evaluate_backend(model, dataloader, backend: str, max_batches: int) -> tuple[_ChannelAccumulator, _ChannelAccumulator]:
-    set_qant_backend(model, backend)
+def _evaluate_backends(
+    model,
+    dataloader,
+    metadata: dict,
+    max_batches: int,
+) -> tuple[dict[str, _ChannelAccumulator], dict[str, _ChannelAccumulator]]:
+    signal_metadata = get_signals_metadata()
+    output_names = metadata["sources_and_signals"]["output_name"]
+    feature_names = [f"{source}-{signal}" for source, signal in output_names]
+    torch_accumulators = {
+        name: _ChannelAccumulator(metadata["output"][name]["std"], signal_metadata[name]["std"])
+        for name in feature_names
+    }
+    qant_accumulators = {
+        name: _ChannelAccumulator(metadata["output"][name]["std"], signal_metadata[name]["std"])
+        for name in feature_names
+    }
+
     model.eval()
-    te_acc, ne_acc = _ChannelAccumulator(), _ChannelAccumulator()
     with torch.no_grad():
         for batch_index, batch in enumerate(dataloader):
             if batch_index >= max_batches:
                 break
             if batch is None:
                 continue
-            _, _, inputs, targets = batch
+            shot_ids, _, inputs, targets = batch
             inputs = [x.float().cpu() for x in inputs]
-            predictions = unwrap_predictions(model(*inputs))
-            te_pred, ne_pred = predictions[0], predictions[1]
-            te_target, ne_target = targets[0].float().cpu(), targets[1].float().cpu()
-            te_acc.update(te_pred, te_target)
-            ne_acc.update(ne_pred, ne_target)
-    return te_acc, ne_acc
+            targets = [target.float().cpu() for target in targets]
+
+            set_qant_backend(model, "torch")
+            torch_predictions = unwrap_predictions(model(*inputs))
+            set_qant_backend(model, "qant")
+            qant_predictions = unwrap_predictions(model(*inputs))
+
+            for index, feature_name in enumerate(feature_names):
+                torch_accumulators[feature_name].update(
+                    torch_predictions[index], targets[index], shot_ids
+                )
+                qant_accumulators[feature_name].update(
+                    qant_predictions[index], targets[index], shot_ids
+                )
+    return torch_accumulators, qant_accumulators
+
+
+def _combine_channel_metrics(accumulators: dict[str, _ChannelAccumulator]) -> dict[str, float | int]:
+    shot_nrmse: dict[int, list[float]] = {}
+    shot_nmae: dict[int, list[float]] = {}
+    for accumulator in accumulators.values():
+        for shot_id, windows in accumulator.windows_by_shot.items():
+            rmse = float(np.sqrt(np.mean([rmse_squared for rmse_squared, _ in windows])))
+            mae = float(np.mean([mae for _, mae in windows]))
+            shot_nrmse.setdefault(shot_id, []).append(rmse / accumulator.metric_scale)
+            shot_nmae.setdefault(shot_id, []).append(mae / accumulator.metric_scale)
+    task_nrmse = [float(np.mean(values)) for values in shot_nrmse.values()]
+    task_nmae = [float(np.mean(values)) for values in shot_nmae.values()]
+    return {
+        "n_shots": len(task_nrmse),
+        "combined_nrmse": float(np.mean(task_nrmse)) if task_nrmse else float("nan"),
+        "combined_nmae": float(np.mean(task_nmae)) if task_nmae else float("nan"),
+    }
 
 
 def quantify_model_seed(
@@ -186,8 +254,11 @@ def quantify_model_seed(
     checkpoint = _checkpoint_path(config, config.get("_split", "random"), model_name, task_name, seed)
     model.load_state_dict(torch.load(checkpoint, map_location="cpu"))
 
-    te_torch, ne_torch = _evaluate_backend(model, dataloader, "torch", max_batches)
-    te_qant, ne_qant = _evaluate_backend(model, dataloader, "qant", max_batches)
+    torch_accumulators, qant_accumulators = _evaluate_backends(
+        model, dataloader, metadata, max_batches
+    )
+    torch_metrics = _combine_channel_metrics(torch_accumulators)
+    qant_metrics = _combine_channel_metrics(qant_accumulators)
 
     def _rel_delta(a: float, b: float) -> float:
         return (b - a) / a if a else float("nan")
@@ -195,15 +266,21 @@ def quantify_model_seed(
     return {
         "model": model_name,
         "seed": seed,
-        "n_windows": te_torch.count,
-        "te_nrmse_torch": te_torch.nrmse(),
-        "te_nrmse_qant": te_qant.nrmse(),
-        "te_nrmse_rel_delta": _rel_delta(te_torch.nrmse(), te_qant.nrmse()),
-        "ne_nrmse_torch": ne_torch.nrmse(),
-        "ne_nrmse_qant": ne_qant.nrmse(),
-        "ne_nrmse_rel_delta": _rel_delta(ne_torch.nrmse(), ne_qant.nrmse()),
-        "combined_nrmse_torch": (te_torch.nrmse() + ne_torch.nrmse()) / 2,
-        "combined_nrmse_qant": (te_qant.nrmse() + ne_qant.nrmse()) / 2,
+        "n_shots": torch_metrics["n_shots"],
+        "nrmse_torch_by_signal": {name: metric.metrics()["nrmse"] for name, metric in torch_accumulators.items()},
+        "nrmse_qant_by_signal": {name: metric.metrics()["nrmse"] for name, metric in qant_accumulators.items()},
+        "nrmse_rel_delta_by_signal": {
+            name: _rel_delta(
+                float(torch_accumulators[name].metrics()["nrmse"]),
+                float(qant_accumulators[name].metrics()["nrmse"]),
+            )
+            for name in torch_accumulators
+        },
+        "combined_nrmse_torch": torch_metrics["combined_nrmse"],
+        "combined_nrmse_qant": qant_metrics["combined_nrmse"],
+        "combined_nrmse_rel_delta": _rel_delta(
+            float(torch_metrics["combined_nrmse"]), float(qant_metrics["combined_nrmse"])
+        ),
     }
 
 
@@ -212,12 +289,17 @@ def main() -> None:
     parser.add_argument("--task", default="task_3-1")
     parser.add_argument("--config", default="/src/config/config_model.yaml")
     parser.add_argument("--split", default="random", choices=["random", "temporal"])
+    parser.add_argument("--batch-size", type=int, default=8, help="Small CPU batch for the Q.ANT SDK backend")
     parser.add_argument("--max-batches", type=int, default=8, help="Test batches per backend (qant is ~6.5x slower)")
     parser.add_argument(
         "--models", nargs="*", default=list(QANT_CAPABLE_MODELS), choices=list(QANT_CAPABLE_MODELS)
     )
+    parser.add_argument("--seeds", nargs="*", type=int, help="Optional subset of checkpoint seeds")
     parser.add_argument("--output", default="results/bfloat16_error_report.json")
     args = parser.parse_args()
+
+    if args.batch_size < 1 or args.max_batches < 1:
+        parser.error("--batch-size and --max-batches must both be positive")
 
     if not qant_available():
         raise RuntimeError("Native Q.ANT SDK not available in this environment; cannot quantify bfloat16 error.")
@@ -228,13 +310,15 @@ def main() -> None:
     config_task = get_task_config(task_name=args.task)
 
     dataloader, metadata = _build_test_dataloader(
-        args.task, args.split, config, config_task, batch_size=config["dataloader_setting"]["batch_size"]
+        args.task, args.split, config, config_task, batch_size=args.batch_size
     )
     metadata = metadata | config_task
 
     results = []
     for model_name in args.models:
         seeds = _discover_seeds(config, args.split, model_name, args.task)
+        if args.seeds is not None:
+            seeds = [seed for seed in seeds if seed in args.seeds]
         if not seeds:
             print(f"[skip] no checkpoints found for {model_name}")
             continue
@@ -247,9 +331,11 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001 - report and continue across models/seeds
                 print(f"[error] {model_name} seed={seed}: {exc}")
                 continue
-            print(f"  combined NRMSE torch={result['combined_nrmse_torch']:.4f} "
-                  f"qant={result['combined_nrmse_qant']:.4f} "
-                  f"(Te delta={result['te_nrmse_rel_delta']:+.2%}, Ne delta={result['ne_nrmse_rel_delta']:+.2%})")
+            print(
+                f"  combined NRMSE torch={result['combined_nrmse_torch']:.4f} "
+                f"qant={result['combined_nrmse_qant']:.4f} "
+                f"(delta={result['combined_nrmse_rel_delta']:+.2%})"
+            )
             results.append(result)
 
     output_path = Path(REPO_ROOT) / args.output
@@ -259,12 +345,10 @@ def main() -> None:
     print(f"\nSaved {len(results)} results to {output_path}")
 
     if results:
-        te_deltas = [r["te_nrmse_rel_delta"] for r in results if not np.isnan(r["te_nrmse_rel_delta"])]
-        ne_deltas = [r["ne_nrmse_rel_delta"] for r in results if not np.isnan(r["ne_nrmse_rel_delta"])]
+        deltas = [r["combined_nrmse_rel_delta"] for r in results if not np.isnan(r["combined_nrmse_rel_delta"])]
         combined_torch = [r["combined_nrmse_torch"] for r in results]
         print(f"\nAcross {len(results)} (model, seed) pairs:")
-        print(f"  Te NRMSE relative delta:  mean={np.mean(te_deltas):+.2%}  std={np.std(te_deltas):.2%}")
-        print(f"  Ne NRMSE relative delta:  mean={np.mean(ne_deltas):+.2%}  std={np.std(ne_deltas):.2%}")
+        print(f"  Combined NRMSE relative delta: mean={np.mean(deltas):+.2%} std={np.std(deltas):.2%}")
         if len(combined_torch) > 1:
             seed_spread = (max(combined_torch) - min(combined_torch)) / np.mean(combined_torch)
             print(f"  Seed-to-seed NRMSE spread (torch backend only): {seed_spread:.2%} "
