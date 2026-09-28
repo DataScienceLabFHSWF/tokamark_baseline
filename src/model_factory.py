@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.multi_conv_lstm_model import create_lstm_architecture
 from src.multi_conv_mlp_model import create_cnn_architecture
+from src.multi_conv_mlp_model_qant import create_cnn_qant_architecture
 from src.plume_tokamark_adapter import TokaMarkPLUMEAdapter
 
 PLUME_MODEL_CHOICES = (
@@ -14,7 +15,10 @@ PLUME_MODEL_CHOICES = (
     "plume_direct_mse",
     "plume_direct_jepa",
 )
-MODEL_CHOICES = ("cnn", "lstm", *PLUME_MODEL_CHOICES)
+# cnn_qant: architecturally identical to cnn, but built from Q.ANT-dispatched
+# conv/pool/batchnorm/linear/relu primitives (see src/qant_conv_layers.py),
+# enabling a genuine apples-to-apples bfloat16 comparison against the PLUME variants.
+MODEL_CHOICES = ("cnn", "cnn_qant", "lstm", *PLUME_MODEL_CHOICES)
 
 
 def create_model(
@@ -31,6 +35,15 @@ def create_model(
             dict_metadata=metadata,
             verbose=verbose,
         )
+    if model_name == "cnn_qant":
+        model = create_cnn_qant_architecture(
+            dataloader_=dataloader,
+            dict_metadata=metadata,
+            verbose=verbose,
+        )
+        qant_backend = config.get("cnn", {}).get("qant_backend", "torch")
+        model.set_qant_backend(qant_backend)
+        return model
     if model_name == "lstm":
         return create_lstm_architecture(
             dataloader_=dataloader,

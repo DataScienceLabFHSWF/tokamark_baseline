@@ -28,5 +28,11 @@ plume:
     latent_weight: 1.0
     reconstruction_weight: 0.3
 
+# cnn_qant only: identical architecture to cnn, built from Q.ANT-dispatched
+# primitives. torch (default) is numerically identical to the plain cnn model;
+# qant requires a CPU host with the Q.ANT SDK installed.
+cnn:
+  qant_backend: torch
+
 paths:
   data_output_directory: /output
