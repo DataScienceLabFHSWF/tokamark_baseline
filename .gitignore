@@ -1,12 +1,13 @@
 # Editor / IDE
 .vscode/
 .idea/
+*windows_metrics.csv*
 
 # Supporting directories and files
 logs/
 output/
 output*/
-results*/
+
 *.wilkes3
 launch.json
 

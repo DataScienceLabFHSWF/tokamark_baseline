@@ -1,13 +1,14 @@
 import os
+
 import numpy as np
-
 import torch
-import torch.nn as nn
-from torch.utils.data._utils.collate import default_collate
+
 # import torch.nn.functional as F
-
 from tokamark.tools.utils import get_device
+from torch import nn
+from torch.utils.data._utils.collate import default_collate
 
+from src.plume_tokamark_adapter import unwrap_predictions
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Default values
@@ -86,6 +87,44 @@ class MultiOutputMSELoss(nn.Module):
         return torch.stack(losses).mean()
 
 
+class ForecastLoss(nn.Module):
+    """Baseline masked profile MSE plus optional PLUME auxiliary losses."""
+
+    def __init__(self, loss_weights=None):
+        super().__init__()
+        self.profile_criterion = MultiOutputMSELoss()
+        self.loss_weights = loss_weights or {
+            "profile": 1.0,
+            "latent": 0.0,
+            "reconstruction": 0.0,
+        }
+        self.last_components = {}
+
+    def forward(self, model_output, y_trues):
+        predictions = unwrap_predictions(model_output)
+        profile_loss = self.profile_criterion(predictions, y_trues)
+        zero = profile_loss.new_zeros(())
+        auxiliary = (
+            model_output.get("aux_losses", {})
+            if isinstance(model_output, dict)
+            else {}
+        )
+        latent_loss = auxiliary.get("latent", zero)
+        reconstruction_loss = auxiliary.get("reconstruction", zero)
+        total = (
+            self.loss_weights["profile"] * profile_loss
+            + self.loss_weights["latent"] * latent_loss
+            + self.loss_weights["reconstruction"] * reconstruction_loss
+        )
+        self.last_components = {
+            "profile": profile_loss.detach(),
+            "latent": latent_loss.detach(),
+            "reconstruction": reconstruction_loss.detach(),
+            "total": total.detach(),
+        }
+        return total
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # TRAINING LOOP
 # ----------------------------------------------------------------------------------------------------------------------
@@ -106,7 +145,10 @@ def train_step(model, batch, optimizer, criterion, device=DEVICE):
 
     optimizer.zero_grad(set_to_none=True)
 
-    outputs = model(*x)
+    if getattr(model, "supports_auxiliary_losses", False):
+        outputs = model(*x, targets=y)
+    else:
+        outputs = model(*x)
     loss = criterion(outputs, y)
 
     loss.backward()
@@ -137,7 +179,10 @@ def validate(model, loader, criterion, device=DEVICE, count_stats=False, return_
 
         x, y = move_batch_to_device(batch, device)
 
-        outputs = model(*x)
+        if getattr(model, "supports_auxiliary_losses", False):
+            outputs = model(*x, targets=y)
+        else:
+            outputs = model(*x)
         loss = criterion(outputs, y)
 
         bs = y[0].shape[0]
@@ -177,6 +222,7 @@ class BatchStepTrainer:
         device=DEVICE,
         validate_every=100,  # Validate every k batches
         verbose=True,
+        loss_weights=None,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -202,7 +248,7 @@ class BatchStepTrainer:
         self.optimizer = torch.optim.Adam(
             model.parameters(), lr=lr, weight_decay=1e-4
         )
-        self.criterion = MultiOutputMSELoss()
+        self.criterion = ForecastLoss(loss_weights=loss_weights)
 
         self.best_val_loss = float("inf")
         self.valid_no_improve = 0
@@ -239,9 +285,8 @@ class BatchStepTrainer:
                 )
                 # Unpack tuple
                 if isinstance(result, tuple):
-                    val_loss_temp, val_stats = result
+                    _, val_stats = result
                 else:
-                    val_loss_temp = result
                     val_stats = None
                 
                 # Create stats dictionary

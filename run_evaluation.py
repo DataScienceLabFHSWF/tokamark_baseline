@@ -1,8 +1,8 @@
 import argparse
-import yaml
 from multiprocessing import cpu_count
-import torch.multiprocessing as mp
 
+import torch.multiprocessing as mp
+import yaml
 from torch.utils.data import DataLoader
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -14,29 +14,35 @@ try:
 except ImportError:
     from .globals import REPO_ROOT
 
-from tokamark.tools.utils import get_device
-from tokamark.data_split import get_train_test_val_shots
-from tokamark.tasks import get_task_config, get_task_metadata
-from tokamark.tools.transforms.compose_transform import (
-    ComposeTransforms,
+from MAST_tools.utils.path_utils import (
+    RANDOM_SPLIT_OUTLIER_METADATA_FILE,
+    TEMPORAL_SPLIT_OUTLIER_METADATA_FILE,
 )
 from tokamark.data import (
-    initialize_MAST_dataset, 
+    initialize_MAST_dataset,
     initialize_TokaMark_dataset,
 )
-
+from tokamark.data_split import get_train_test_val_shots
 from tokamark.evaluator import (
     WindowMetricsAccumulator,
     compute_metrics,
 )
-
-
-from src.multi_conv_mlp_model import (
-    create_cnn_architecture
+from tokamark.tasks import get_task_config, get_task_metadata
+from tokamark.tools.path import (
+    RANDOM_SPLIT_SIGNALS_STATS_FILE,
+    RANDOM_SPLIT_TOKAMARK_DATA_SPLITS_FILE,
+    TEMPORAL_SPLIT_SIGNALS_STATS_FILE,
+    TEMPORAL_SPLIT_TOKAMARK_DATA_SPLITS_FILE,
 )
-from src.multi_conv_lstm_model import (
-    create_lstm_architecture
+from tokamark.tools.transforms.compose_transform import (
+    ComposeTransforms,
 )
+from tokamark.tools.utils import get_device
+
+from src.evaluator import (
+    cnn_unstd_evaluation_per_shot,
+)
+from src.model_factory import MODEL_CHOICES, create_model
 from src.model_transform import (
     ModelTransform_1,
     ModelTransform_2,
@@ -44,23 +50,6 @@ from src.model_transform import (
 from src.trainer import (
     model_collate_fn,
 )
-
-from src.evaluator import (
-    cnn_unstd_evaluation_per_shot,
-)
-
-from tokamark.tools.path import (
-    RANDOM_SPLIT_TOKAMARK_DATA_SPLITS_FILE, 
-    RANDOM_SPLIT_SIGNALS_STATS_FILE,
-    TEMPORAL_SPLIT_TOKAMARK_DATA_SPLITS_FILE, 
-    TEMPORAL_SPLIT_SIGNALS_STATS_FILE
-    )
-
-from MAST_tools.utils.path_utils import (
-    RANDOM_SPLIT_OUTLIER_METADATA_FILE,
-    TEMPORAL_SPLIT_OUTLIER_METADATA_FILE,
-    )
-
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -100,7 +89,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        choices=["cnn", "lstm"],
+        choices=MODEL_CHOICES,
         default="cnn",
         help="Model type to train."
     )
@@ -221,25 +210,14 @@ if __name__ == "__main__":
     # Initialize Model
     # ------------------------------------------------------------------------------------------------------------------
 
-    if args.model == "cnn":
-
-        model = create_cnn_architecture(
-            dataloader_=test_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-
-    elif args.model == "lstm":
-
-        model = create_lstm_architecture(
-            dataloader_=test_dataloader,
-            dict_metadata = dict_task_metadata | config_task,
-            verbose=False
-        )
-         
-    else:
-        print("Model Unknown")
-        raise ValueError("Unknown model.")
+    model = create_model(
+        model_name=args.model,
+        dataloader=test_dataloader,
+        metadata=dict_task_metadata | config_task,
+        config=config,
+        task_name=args.task,
+        verbose=False,
+    ).to(device)
 
     # -------------------------------------------------------------------
     # Training loop
