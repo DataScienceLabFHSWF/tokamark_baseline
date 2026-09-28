@@ -1,6 +1,7 @@
 # Editor / IDE
 .vscode/
 .idea/
+*windows_metrics.csv*
 
 # Supporting directories and files
 logs/
