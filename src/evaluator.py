@@ -27,11 +27,13 @@ def cnn_unstd_evaluation_per_shot(
 
     print("in cnn_unstd_evaluation_per_shot")
 
+    eval_device = torch.device("cpu") if getattr(cnn_model, "qant_backend", None) == "qant" else device
+
     best_model_path = output_dir + "best_model.pt"
 
     # Load best model
-    cnn_model.load_state_dict(torch.load(best_model_path, map_location=device))
-    cnn_model.to(device)
+    cnn_model.load_state_dict(torch.load(best_model_path, map_location=eval_device))
+    cnn_model.to(eval_device)
     cnn_model.eval()
 
     feature_names = config_task["sources_and_signals"].get("output_name", [])
@@ -50,8 +52,8 @@ def cnn_unstd_evaluation_per_shot(
             shot_id, window_id, x_test, y_test = batch
 
             # Move inputs and labels to device
-            x_test = [arr.to(torch.float32).to(device) for arr in x_test]
-            y_test = [arr.to(torch.float32).to(device) for arr in y_test]
+            x_test = [arr.to(torch.float32).to(eval_device) for arr in x_test]
+            y_test = [arr.to(torch.float32).to(eval_device) for arr in y_test]
 
             # Model prediction
             y_pred = unwrap_predictions(cnn_model(*x_test))

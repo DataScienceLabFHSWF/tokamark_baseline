@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.multi_conv_lstm_model import create_lstm_architecture
 from src.multi_conv_mlp_model import create_cnn_architecture
 from src.multi_conv_mlp_model_qant import create_cnn_qant_architecture
+from src.controlled_edmd_qant import TokaMarkControlledEDMD
 from src.plume_tokamark_adapter import TokaMarkPLUMEAdapter
 
 PLUME_MODEL_CHOICES = (
@@ -15,10 +16,11 @@ PLUME_MODEL_CHOICES = (
     "plume_direct_mse",
     "plume_direct_jepa",
 )
+EDMD_MODEL_CHOICES = ("plume_controlled_edmd",)
 # cnn_qant: architecturally identical to cnn, but built from Q.ANT-dispatched
 # conv/pool/batchnorm/linear/relu primitives (see src/qant_conv_layers.py),
 # enabling a genuine apples-to-apples bfloat16 comparison against the PLUME variants.
-MODEL_CHOICES = ("cnn", "cnn_qant", "lstm", *PLUME_MODEL_CHOICES)
+MODEL_CHOICES = ("cnn", "cnn_qant", "lstm", *PLUME_MODEL_CHOICES, *EDMD_MODEL_CHOICES)
 
 
 def create_model(
@@ -50,6 +52,16 @@ def create_model(
             dict_metadata=metadata,
             verbose=verbose,
         )
+    if model_name == "plume_controlled_edmd":
+        edmd_config = config.get("plume", {}).get("edmd", {})
+        return TokaMarkControlledEDMD(
+            profile_bins=edmd_config.get("profile_bins", 120),
+            action_dim=edmd_config.get("action_dim", 4),
+            horizon=edmd_config.get("horizon", 10),
+            ridge=edmd_config.get("ridge", 1e-6),
+            input_structure=edmd_config.get("input_structure", "affine"),
+            qant_backend=edmd_config.get("qant_backend", "torch"),
+        )
     if model_name not in PLUME_MODEL_CHOICES:
         raise ValueError(f"Unknown model: {model_name}")
     if task_name != "task_3-1":
@@ -73,6 +85,8 @@ def create_model(
 def get_loss_weights(model_name, config):
     """Make the ``*_mse`` versus ``*_jepa`` distinction explicit."""
 
+    if model_name == "plume_controlled_edmd":
+        return {"profile": 1.0, "latent": 0.0, "reconstruction": 0.0}
     if not model_name.startswith("plume_") or model_name.endswith("_mse"):
         return {
             "profile": 1.0,

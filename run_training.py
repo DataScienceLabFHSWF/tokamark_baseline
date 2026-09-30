@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 from multiprocessing import cpu_count
 from typing import Any
 
@@ -40,6 +42,7 @@ from src.model_transform import (
 )
 from src.trainer import (
     BatchStepTrainer,
+    edmd_collate_fn,
     model_collate_fn,
 )
 from utils import seed_worker, set_seed
@@ -99,6 +102,10 @@ if __name__ == "__main__":
         default="random",
         help="Splitting used."
     )
+    parser.add_argument("--edmd-ridge", type=float, default=None)
+    parser.add_argument("--edmd-structure", choices=["affine", "bilinear"], default=None)
+    parser.add_argument("--edmd-backend", choices=["torch", "qant", "auto"], default=None)
+    parser.add_argument("--run-id", type=str, default="")
     args, _ = parser.parse_known_args()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -111,6 +118,15 @@ if __name__ == "__main__":
     # Load CNN YAML config
     with open(REPO_ROOT + args.config, "r") as f:
         config = yaml.safe_load(f)
+
+    if args.edmd_ridge is not None or args.edmd_backend is not None or args.edmd_structure is not None:
+        config.setdefault("plume", {}).setdefault("edmd", {})
+        if args.edmd_ridge is not None:
+            config["plume"]["edmd"]["ridge"] = args.edmd_ridge
+        if args.edmd_backend is not None:
+            config["plume"]["edmd"]["qant_backend"] = args.edmd_backend
+        if args.edmd_structure is not None:
+            config["plume"]["edmd"]["input_structure"] = args.edmd_structure
 
     SEED = args.seed
     set_seed(SEED)
@@ -238,14 +254,15 @@ if __name__ == "__main__":
         custom_transform=model_specific_transform,
         test_mode=True
     )
+    collate_fn = edmd_collate_fn if args.model == "plume_controlled_edmd" else model_collate_fn
     train_dataloader: DataLoader[Any] = DataLoader(
             dataset=train_dataset,
-            collate_fn=model_collate_fn,
+            collate_fn=collate_fn,
             worker_init_fn=seed_worker,
             generator=g,
             **config["dataloader_setting"],
             pin_memory=torch.cuda.is_available(),
-            drop_last=True
+            drop_last=args.model != "plume_controlled_edmd"
         )
 
     val_dataset = initialize_TokaMark_dataset(
@@ -257,7 +274,7 @@ if __name__ == "__main__":
     )
     val_dataloader = DataLoader(
             dataset=val_dataset,
-            collate_fn=model_collate_fn,
+            collate_fn=collate_fn,
             worker_init_fn=seed_worker,
             generator=g,
             **config["dataloader_setting"],
@@ -275,7 +292,9 @@ if __name__ == "__main__":
         config=config,
         task_name=args.task,
         verbose=False,
-    ).to(device)
+    )
+    model_device = torch.device("cpu") if getattr(model, "qant_backend", None) == "qant" else device
+    model = model.to(model_device)
         
     # ------------------------------------------------------------------------------------------------------------------
     # Training loop
@@ -283,11 +302,27 @@ if __name__ == "__main__":
 
     base = config["paths"]["data_output_directory"]
 
+    model_path_name = args.model + (f"__{args.run_id}" if args.run_id else "")
     base_model_dir = (
         REPO_ROOT
         + base
-        + f"/{args.split}/{args.model}/{config_task['task_name']}/seed_{SEED}/"
+        + f"/{args.split}/{model_path_name}/{config_task['task_name']}/seed_{SEED}/"
     )
+
+    if args.model == "plume_controlled_edmd":
+        os.makedirs(base_model_dir, exist_ok=True)
+        snapshot_count = model.fit_batches(train_dataloader)
+        validation_snapshots = model.snapshots_from_batches(val_dataloader)
+        diagnostics = model.diagnostics(validation_snapshots)
+        diagnostics["snapshot_count"] = snapshot_count
+        torch.save(model.state_dict(), base_model_dir + "best_model.pt")
+        with open(base_model_dir + "edmd_diagnostics.json", "w") as diagnostics_file:
+            json.dump(diagnostics, diagnostics_file, indent=2)
+        print(
+            f"Fitted controlled EDMD on {snapshot_count} training snapshots; "
+            f"checkpoint written to {base_model_dir}"
+        )
+        raise SystemExit(0)
 
     trainer = BatchStepTrainer(
         model=model,

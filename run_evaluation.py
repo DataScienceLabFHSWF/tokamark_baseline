@@ -48,6 +48,7 @@ from src.model_transform import (
     ModelTransform_2,
 )
 from src.trainer import (
+    edmd_collate_fn,
     model_collate_fn,
 )
 
@@ -100,6 +101,11 @@ if __name__ == "__main__":
         default="random",
         help="Splitting used."
     )
+    parser.add_argument("--edmd-ridge", type=float, default=None)
+    parser.add_argument("--edmd-structure", choices=["affine", "bilinear"], default=None)
+    parser.add_argument("--edmd-backend", choices=["torch", "qant", "auto"], default=None)
+    parser.add_argument("--run-id", type=str, default="")
+    parser.add_argument("--data-root", type=str, default=None)
     args, _ = parser.parse_known_args()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -112,6 +118,17 @@ if __name__ == "__main__":
     # Load CNN YAML config
     with open(REPO_ROOT + args.config, "r") as f:
         config = yaml.safe_load(f)
+
+    if args.edmd_ridge is not None or args.edmd_backend is not None or args.edmd_structure is not None:
+        config.setdefault("plume", {}).setdefault("edmd", {})
+        if args.edmd_ridge is not None:
+            config["plume"]["edmd"]["ridge"] = args.edmd_ridge
+        if args.edmd_backend is not None:
+            config["plume"]["edmd"]["qant_backend"] = args.edmd_backend
+        if args.edmd_structure is not None:
+            config["plume"]["edmd"]["input_structure"] = args.edmd_structure
+    if args.data_root is not None:
+        config.setdefault("store_manager_settings", {})["base_local_zarr_path"] = args.data_root
     
     SEED = args.seed
     print(SEED)
@@ -194,15 +211,16 @@ if __name__ == "__main__":
     if test_dataset is None:
         raise ValueError("Failed to initialize test dataset. test_MAST_dataset may be None or invalid.")
     
-    test_dataloader = DataLoader(
+        collate_fn = edmd_collate_fn if args.model == "plume_controlled_edmd" else model_collate_fn
+        test_dataloader = DataLoader(
             dataset=test_dataset,
-            collate_fn=model_collate_fn,
+            collate_fn=collate_fn,
             **config["dataloader_setting"],
             pin_memory=True,
         )    
     test_dataloader_vizu = DataLoader(
             dataset=test_dataset,
-            collate_fn=model_collate_fn,
+            collate_fn=collate_fn,
             batch_size=1,
             num_workers=0,
         )
@@ -217,7 +235,9 @@ if __name__ == "__main__":
         config=config,
         task_name=args.task,
         verbose=False,
-    ).to(device)
+    )
+    model_device = torch.device("cpu") if getattr(model, "qant_backend", None) == "qant" else device
+    model = model.to(model_device)
 
     # -------------------------------------------------------------------
     # Training loop
@@ -225,17 +245,18 @@ if __name__ == "__main__":
 
     base = config["paths"]["data_output_directory"]
 
+    model_path_name = args.model + (f"__{args.run_id}" if args.run_id else "")
     base_model_dir = (
         REPO_ROOT
         + base
-        + f"/{args.split}/{args.model}/{config_task['task_name']}/seed_{SEED}/"
+        + f"/{args.split}/{model_path_name}/{config_task['task_name']}/seed_{SEED}/"
     )
 
     # -------------------------------------------------------------------
     # Evaluation
     # -------------------------------------------------------------------
 
-    results_dir = REPO_ROOT + f"/results/{args.split}/{args.model}/seed_{SEED}/"
+    results_dir = REPO_ROOT + f"/results/{args.split}/{model_path_name}/seed_{SEED}/"
 
     # cnn_safety_vizu_per_shot(test_dataloader_vizu, config_task, cnn_model, base_model_dir, n_shot_to_plot=3)
     accumulator = WindowMetricsAccumulator(args.task)

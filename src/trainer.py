@@ -43,6 +43,22 @@ def model_collate_fn(batch, verbose=False):
 
     return default_collate(full_flattened_batch) if (len(full_flattened_batch) > 0) else None
 
+
+def edmd_collate_fn(batch, verbose=False):
+    """Collate EDMD batches without converting missing measurements to zeros."""
+    full_flattened_batch = [
+        (
+            item["shot_id"],
+            item["window_index"],
+            [np.asarray(x) for x in item["input"] + item["exogenous"]],
+            item["y"],
+        )
+        for item in batch
+    ]
+    if verbose:
+        print(f"Collating EDMD batch of size = {len(full_flattened_batch)}")
+    return default_collate(full_flattened_batch) if full_flattened_batch else None
+
 # ----------------------------------------------------------------------------------------------------------------------
 # CNN LOSS
 # ----------------------------------------------------------------------------------------------------------------------
