@@ -48,17 +48,30 @@ def _condition_metadata(path: Path) -> Dict:
         metadata = {
             "Model": "controlled_edmd",
             "structure": "unknown",
+            "observable": "physical",
+            "delay_steps": 1,
             "ridge": "unknown",
             "backend": "unknown",
             "seed": seed,
+            "status": "preliminary",
         }
+        has_observable_label = False
+        has_delay_label = False
         for field in condition.split("__")[1:]:
             if field in {"affine", "bilinear"}:
                 metadata["structure"] = field
+            elif field in {"physical", "pod_quadratic"}:
+                metadata["observable"] = field
+                has_observable_label = True
+            elif field.startswith("delay_"):
+                metadata["delay_steps"] = int(field.removeprefix("delay_"))
+                has_delay_label = True
             elif field.startswith("ridge_"):
                 metadata["ridge"] = field.removeprefix("ridge_")
             elif field in {"torch", "qant", "auto"}:
                 metadata["backend"] = field
+        if has_observable_label and has_delay_label:
+            metadata["status"] = "corrected"
         return metadata
 
     if seed is not None:
@@ -219,11 +232,17 @@ def generate_bfloat16_table(bfloat_errors: Dict) -> str:
 
 def generate_edmd_table(records: pd.DataFrame) -> str:
     """Generate a LaTeX table aggregated by EDMD structure and backend."""
-    edmd = records[records["Model"] == "controlled_edmd"].copy()
+    edmd = records[
+        (records["Model"] == "controlled_edmd")
+        & (records.get("status", "preliminary") == "corrected")
+    ].copy()
     if edmd.empty:
         return "% No controlled EDMD task metrics found.\n"
     summary = (
-        edmd.groupby(["structure", "ridge", "backend"], dropna=False)
+        edmd.groupby(
+            ["observable", "delay_steps", "structure", "ridge", "backend"],
+            dropna=False,
+        )
         .agg(
             nrmse=("NRMSE_mean", "mean"),
             nrmse_seed_std=("NRMSE_mean", "std"),
@@ -238,14 +257,15 @@ def generate_edmd_table(records: pd.DataFrame) -> str:
         "\\begin{table}[]",
         "\\centering",
         "\\small",
-        "\\begin{tabular}{lllccl}",
+        "\\begin{tabular}{lllllccc}",
         "\\toprule",
-        "Structure & Ridge & Backend & NRMSE & NMAE & Seeds \\\\",
+        "Observable & Delay & Structure & Ridge & Backend & NRMSE & NMAE & Seeds \\\\",
         "\\midrule",
     ]
     for _, row in summary.iterrows():
         lines.append(
-            f"{row['structure']} & {row['ridge']} & {row['backend']} & "
+            f"{row['observable']} & {int(row['delay_steps'])} & {row['structure']} & "
+            f"{row['ridge']} & {row['backend']} & "
             f"{row['nrmse']:.4f} $\\pm$ {row['nrmse_seed_std']:.4f} & "
             f"{row['nmae']:.4f} $\\pm$ {row['nmae_seed_std']:.4f} & "
             f"{int(row['seeds'])} \\\\")
@@ -307,5 +327,10 @@ if __name__ == "__main__":
         print("No controlled EDMD task metrics found.")
     else:
         print(central_records.to_string(index=False))
+        preliminary_count = int(
+            ((central_records["Model"] == "controlled_edmd")
+             & (central_records["status"] != "corrected")).sum()
+        )
+        print(f"\nExcluded preliminary/legacy EDMD records from LaTeX table: {preliminary_count}")
         print()
         print(generate_edmd_table(central_records))

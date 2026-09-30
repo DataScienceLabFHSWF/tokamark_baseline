@@ -104,6 +104,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--edmd-ridge", type=float, default=None)
     parser.add_argument("--edmd-structure", choices=["affine", "bilinear"], default=None)
+    parser.add_argument("--edmd-observable", choices=["physical", "pod_quadratic"], default=None)
+    parser.add_argument("--edmd-delay-steps", type=int, default=None)
     parser.add_argument("--edmd-backend", choices=["torch", "qant", "auto"], default=None)
     parser.add_argument("--run-id", type=str, default="")
     args, _ = parser.parse_known_args()
@@ -119,7 +121,13 @@ if __name__ == "__main__":
     with open(REPO_ROOT + args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    if args.edmd_ridge is not None or args.edmd_backend is not None or args.edmd_structure is not None:
+    if (
+        args.edmd_ridge is not None
+        or args.edmd_backend is not None
+        or args.edmd_structure is not None
+        or args.edmd_observable is not None
+        or args.edmd_delay_steps is not None
+    ):
         config.setdefault("plume", {}).setdefault("edmd", {})
         if args.edmd_ridge is not None:
             config["plume"]["edmd"]["ridge"] = args.edmd_ridge
@@ -127,6 +135,10 @@ if __name__ == "__main__":
             config["plume"]["edmd"]["qant_backend"] = args.edmd_backend
         if args.edmd_structure is not None:
             config["plume"]["edmd"]["input_structure"] = args.edmd_structure
+        if args.edmd_observable is not None:
+            config["plume"]["edmd"]["observable_type"] = args.edmd_observable
+        if args.edmd_delay_steps is not None:
+            config["plume"]["edmd"]["delay_steps"] = args.edmd_delay_steps
 
     SEED = args.seed
     set_seed(SEED)
@@ -312,8 +324,8 @@ if __name__ == "__main__":
     if args.model == "plume_controlled_edmd":
         os.makedirs(base_model_dir, exist_ok=True)
         snapshot_count = model.fit_batches(train_dataloader)
-        validation_snapshots = model.snapshots_from_batches(val_dataloader)
-        diagnostics = model.diagnostics(validation_snapshots)
+        diagnostics = model.diagnostics()
+        diagnostics.update(model.closure_diagnostics_batches(val_dataloader))
         diagnostics["snapshot_count"] = snapshot_count
         torch.save(model.state_dict(), base_model_dir + "best_model.pt")
         with open(base_model_dir + "edmd_diagnostics.json", "w") as diagnostics_file:

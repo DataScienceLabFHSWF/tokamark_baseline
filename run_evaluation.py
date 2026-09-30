@@ -1,6 +1,7 @@
 import argparse
 from multiprocessing import cpu_count
 
+import torch
 import torch.multiprocessing as mp
 import yaml
 from torch.utils.data import DataLoader
@@ -103,6 +104,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--edmd-ridge", type=float, default=None)
     parser.add_argument("--edmd-structure", choices=["affine", "bilinear"], default=None)
+    parser.add_argument("--edmd-observable", choices=["physical", "pod_quadratic"], default=None)
+    parser.add_argument("--edmd-delay-steps", type=int, default=None)
     parser.add_argument("--edmd-backend", choices=["torch", "qant", "auto"], default=None)
     parser.add_argument("--run-id", type=str, default="")
     parser.add_argument("--data-root", type=str, default=None)
@@ -119,7 +122,13 @@ if __name__ == "__main__":
     with open(REPO_ROOT + args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    if args.edmd_ridge is not None or args.edmd_backend is not None or args.edmd_structure is not None:
+    if (
+        args.edmd_ridge is not None
+        or args.edmd_backend is not None
+        or args.edmd_structure is not None
+        or args.edmd_observable is not None
+        or args.edmd_delay_steps is not None
+    ):
         config.setdefault("plume", {}).setdefault("edmd", {})
         if args.edmd_ridge is not None:
             config["plume"]["edmd"]["ridge"] = args.edmd_ridge
@@ -127,6 +136,10 @@ if __name__ == "__main__":
             config["plume"]["edmd"]["qant_backend"] = args.edmd_backend
         if args.edmd_structure is not None:
             config["plume"]["edmd"]["input_structure"] = args.edmd_structure
+        if args.edmd_observable is not None:
+            config["plume"]["edmd"]["observable_type"] = args.edmd_observable
+        if args.edmd_delay_steps is not None:
+            config["plume"]["edmd"]["delay_steps"] = args.edmd_delay_steps
     if args.data_root is not None:
         config.setdefault("store_manager_settings", {})["base_local_zarr_path"] = args.data_root
     
@@ -210,9 +223,9 @@ if __name__ == "__main__":
     
     if test_dataset is None:
         raise ValueError("Failed to initialize test dataset. test_MAST_dataset may be None or invalid.")
-    
-        collate_fn = edmd_collate_fn if args.model == "plume_controlled_edmd" else model_collate_fn
-        test_dataloader = DataLoader(
+
+    collate_fn = edmd_collate_fn if args.model == "plume_controlled_edmd" else model_collate_fn
+    test_dataloader = DataLoader(
             dataset=test_dataset,
             collate_fn=collate_fn,
             **config["dataloader_setting"],

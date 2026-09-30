@@ -60,6 +60,9 @@ def create_model(
             horizon=edmd_config.get("horizon", 10),
             ridge=edmd_config.get("ridge", 1e-6),
             input_structure=edmd_config.get("input_structure", "affine"),
+            observable_type=edmd_config.get("observable_type", "physical"),
+            pod_components=edmd_config.get("pod_components", 16),
+            delay_steps=edmd_config.get("delay_steps", 1),
             qant_backend=edmd_config.get("qant_backend", "torch"),
         )
     if model_name not in PLUME_MODEL_CHOICES:

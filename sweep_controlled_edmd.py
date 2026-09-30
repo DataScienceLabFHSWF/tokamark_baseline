@@ -3,7 +3,7 @@
 Run from this directory, for example:
 
     uv run --project ../.. python sweep_controlled_edmd.py \
-        --split random --structures affine bilinear --backends torch qant \
+        --split random --structures affine bilinear --observables physical pod_quadratic --backends torch \
         --data-root /mnt/data2/datasets/tokamark/data
 
 Each condition receives its own checkpoint and metrics directory through
@@ -34,6 +34,13 @@ def main() -> None:
     )
     parser.add_argument("--backends", nargs="+", choices=["torch", "qant"], default=["torch"])
     parser.add_argument("--structures", nargs="+", choices=["affine", "bilinear"], default=["affine"])
+    parser.add_argument(
+        "--observables",
+        nargs="+",
+        choices=["physical", "pod_quadratic"],
+        default=["physical"],
+    )
+    parser.add_argument("--delay-steps", nargs="+", type=int, default=[1])
     parser.add_argument("--seeds", nargs="+", type=int, default=[23])
     parser.add_argument("--data-root", type=str, required=True)
     args = parser.parse_args()
@@ -41,40 +48,49 @@ def main() -> None:
     for seed in args.seeds:
         for ridge in args.ridges:
             ridge_label = f"{ridge:.0e}".replace("+", "")
-            for structure in args.structures:
-                for backend in args.backends:
-                    run_id = f"seed_{seed}__{structure}__ridge_{ridge_label}__{backend}"
-                    common = [
-                        sys.executable,
-                        "run_training.py",
-                        "--task",
-                        args.task,
-                        "--config",
-                        args.config,
-                        "--split",
-                        args.split,
-                        "--seed",
-                        str(seed),
-                        "--model",
-                        MODEL,
-                        "--edmd-ridge",
-                        str(ridge),
-                        "--edmd-backend",
-                        backend,
-                        "--edmd-structure",
-                        structure,
-                        "--run-id",
-                        run_id,
-                        "--data-root",
-                        args.data_root,
-                    ]
-                    print(f"[fit] {run_id}", flush=True)
-                    subprocess.run(common, check=True)
+            for observable in args.observables:
+                for delay_steps in args.delay_steps:
+                    for structure in args.structures:
+                        for backend in args.backends:
+                            run_id = (
+                                f"seed_{seed}__{observable}__delay_{delay_steps}__"
+                                f"{structure}__ridge_{ridge_label}__{backend}"
+                            )
+                            common = [
+                                sys.executable,
+                                "run_training.py",
+                                "--task",
+                                args.task,
+                                "--config",
+                                args.config,
+                                "--split",
+                                args.split,
+                                "--seed",
+                                str(seed),
+                                "--model",
+                                MODEL,
+                                "--edmd-ridge",
+                                str(ridge),
+                                "--edmd-backend",
+                                backend,
+                                "--edmd-structure",
+                                structure,
+                                "--edmd-observable",
+                                observable,
+                                "--edmd-delay-steps",
+                                str(delay_steps),
+                                "--run-id",
+                                run_id,
+                                "--data-root",
+                                args.data_root,
+                            ]
+                            print(f"[fit] {run_id}", flush=True)
+                            subprocess.run(common, check=True)
 
-                    evaluate = common.copy()
-                    evaluate[1] = "run_evaluation.py"
-                    print(f"[eval] {run_id}", flush=True)
-                    subprocess.run(evaluate, check=True)
+                            evaluate = common.copy()
+                            evaluate[1] = "run_evaluation.py"
+                            print(f"[eval] {run_id}", flush=True)
+                            subprocess.run(evaluate, check=True)
 
 
 if __name__ == "__main__":
