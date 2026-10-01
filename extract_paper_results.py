@@ -245,10 +245,8 @@ def generate_edmd_table(records: pd.DataFrame) -> str:
         )
         .agg(
             nrmse=("NRMSE_mean", "mean"),
-            nrmse_seed_std=("NRMSE_mean", "std"),
             nmae=("NMAE_mean", "mean"),
-            nmae_seed_std=("NMAE_mean", "std"),
-            seeds=("seed", "nunique"),
+            fits=("seed", "nunique"),
         )
         .reset_index()
         .fillna(0.0)
@@ -259,16 +257,15 @@ def generate_edmd_table(records: pd.DataFrame) -> str:
         "\\small",
         "\\begin{tabular}{lllllccc}",
         "\\toprule",
-        "Observable & Delay & Structure & Ridge & Backend & NRMSE & NMAE & Seeds \\\\",
+        "Observable & Delay & Structure & Ridge & Backend & NRMSE & NMAE & Fits \\\\",
         "\\midrule",
     ]
     for _, row in summary.iterrows():
         lines.append(
             f"{row['observable']} & {int(row['delay_steps'])} & {row['structure']} & "
             f"{row['ridge']} & {row['backend']} & "
-            f"{row['nrmse']:.4f} $\\pm$ {row['nrmse_seed_std']:.4f} & "
-            f"{row['nmae']:.4f} $\\pm$ {row['nmae_seed_std']:.4f} & "
-            f"{int(row['seeds'])} \\\\")
+            f"{row['nrmse']:.4f} & {row['nmae']:.4f} & "
+            f"{int(row['fits'])} \\\\")
     lines.extend([
         "\\bottomrule",
         "\\end{tabular}",

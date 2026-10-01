@@ -473,6 +473,26 @@ class TokaMarkControlledEDMD(nn.Module):
         self._check_fitted()
         return torch.linalg.eigvals(self.operator.weight.detach().cpu()).abs().max().item()
 
+    def effective_spectral_radii(self, controls: torch.Tensor) -> torch.Tensor:
+        """Return spectral radii of the controlled operator over input samples."""
+        self._check_fitted()
+        if self.bilinear is None:
+            return torch.full(
+                (controls.reshape(-1, self.action_dim).shape[0],),
+                self.spectral_radius(),
+                dtype=torch.float64,
+            )
+        controls = controls.reshape(-1, self.action_dim).detach().cpu().double()
+        bilinear_blocks = self.bilinear.weight.detach().cpu().double().reshape(
+            self.feature_dim, self.action_dim, self.feature_dim
+        )
+        base = self.operator.weight.detach().cpu().double()
+        radii = []
+        for control in controls:
+            effective = base + torch.einsum("j,ijq->iq", control, bilinear_blocks)
+            radii.append(torch.linalg.eigvals(effective).abs().max())
+        return torch.stack(radii)
+
     @staticmethod
     def _profile_sequence(tensor: torch.Tensor) -> torch.Tensor:
         if tensor.ndim < 3:

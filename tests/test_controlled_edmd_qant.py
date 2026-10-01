@@ -120,3 +120,17 @@ def test_delay_coordinates_use_profile_context_and_keep_output_contract():
     predictions = unwrap_predictions(output)
     assert predictions[0].shape == (2, 10, 4)
     assert torch.isfinite(predictions[1]).all()
+
+
+def test_bilinear_effective_spectrum_is_control_conditioned():
+    model = TokaMarkControlledEDMD(profile_bins=4, input_structure="bilinear")
+    batch = _batch(batch_size=2)
+    for branch in batch[2]:
+        branch.zero_()
+    for target in batch[3]:
+        target.zero_()
+    model.fit_batches([batch])
+
+    radii = model.effective_spectral_radii(torch.randn(5, 4))
+    assert radii.shape == (5,)
+    assert torch.isfinite(radii).all()
